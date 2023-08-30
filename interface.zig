@@ -16,7 +16,7 @@ fn makeSelfPtr(ptr: anytype) *SelfType {
     const T = std.meta.Child(@TypeOf(ptr));
 
     if (@sizeOf(T) > 0) {
-        return @ptrCast(*SelfType, ptr);
+        return @as(*SelfType, @ptrCast(ptr));
     } else {
         return undefined;
     }
@@ -24,7 +24,7 @@ fn makeSelfPtr(ptr: anytype) *SelfType {
 
 fn selfPtrAs(self: *SelfType, comptime T: type) *T {
     if (@sizeOf(T) > 0) {
-        return @alignCast(@alignOf(T), @ptrCast(*align(1) T, self));
+        return @alignCast(@as(*align(1) T, @ptrCast(self)));
     } else {
         return undefined;
     }
@@ -32,7 +32,7 @@ fn selfPtrAs(self: *SelfType, comptime T: type) *T {
 
 fn constSelfPtrAs(self: *const SelfType, comptime T: type) *const T {
     if (@sizeOf(T) > 0) {
-        return @alignCast(@alignOf(T), @ptrCast(*align(1) const T, self));
+        return @alignCast(@as(*align(1) const T, @ptrCast(self)));
     } else {
         return undefined;
     }
@@ -98,23 +98,27 @@ pub const Storage = struct {
     pub const Owning = struct {
         allocator: mem.Allocator,
         mem: []u8,
+        buf_align: u8,
 
         fn makeInit(comptime TInterface: type) type {
             return struct {
                 fn init(obj: anytype, allocator: std.mem.Allocator) !TInterface {
                     const AllocT = @TypeOf(obj);
 
-                    const base = try allocator.alignedAlloc(u8, @alignOf(AllocT), @sizeOf(AllocT));
-                    errdefer allocator.free(base);
+                    const size = @sizeOf(AllocT);
+                    const n_align: u8 = comptime std.math.log2_int(usize, @alignOf(AllocT));
 
-                    var ptr = @ptrCast(*AllocT, base.ptr);
+                    const raw_ptr = allocator.rawAlloc(size, n_align, @returnAddress()) orelse return error.OutOfMemory;
+
+                    var ptr: *AllocT = @ptrCast(@alignCast(raw_ptr));
                     ptr.* = obj;
 
                     return TInterface{
                         .vtable_ptr = &comptime makeVTable(TInterface.VTable, PtrChildOrSelf(AllocT)),
                         .storage = Owning{
                             .allocator = allocator,
-                            .mem = base,
+                            .mem = raw_ptr[0..size],
+                            .buf_align = n_align,
                         },
                     };
                 }
@@ -126,7 +130,7 @@ pub const Storage = struct {
         }
 
         pub fn deinit(self: Owning) void {
-            self.allocator.free(self.mem);
+            self.allocator.rawFree(self.mem, self.buf_align, @returnAddress());
         }
     };
 
@@ -149,7 +153,7 @@ pub const Storage = struct {
                             .mem = undefined,
                         };
                         if (ImplSize > 0) {
-                            std.mem.copy(u8, self.mem[0..], @ptrCast([*]const u8, &value)[0..ImplSize]);
+                            std.mem.copy(u8, self.mem[0..], @as([*]const u8, @ptrCast(&value))[0..ImplSize]);
                         }
 
                         return TInterface{
