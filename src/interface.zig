@@ -1,6 +1,5 @@
 const std = @import("std");
 const mem = std.mem;
-const trait = std.meta.trait;
 
 const assert = std.debug.assert;
 const expect = std.testing.expect;
@@ -9,7 +8,7 @@ const expectEqual = std.testing.expectEqual;
 pub const SelfType = opaque {};
 
 fn makeSelfPtr(ptr: anytype) *SelfType {
-    if (comptime !trait.isSingleItemPtr(@TypeOf(ptr))) {
+    if (comptime @typeInfo(@TypeOf(ptr)) != .Pointer) {
         @compileError("SelfType pointer initialization expects pointer parameter.");
     }
 
@@ -110,7 +109,7 @@ pub const Storage = struct {
 
                     const raw_ptr = allocator.rawAlloc(size, n_align, @returnAddress()) orelse return error.OutOfMemory;
 
-                    var ptr: *AllocT = @ptrCast(@alignCast(raw_ptr));
+                    const ptr: *AllocT = @ptrCast(@alignCast(raw_ptr));
                     ptr.* = obj;
 
                     return TInterface{
@@ -223,7 +222,7 @@ pub const Storage = struct {
 };
 
 fn PtrChildOrSelf(comptime T: type) type {
-    if (comptime trait.isSingleItemPtr(T)) {
+    if (comptime @typeInfo(T) == .Pointer) {
         return std.meta.Child(T);
     }
 
@@ -249,7 +248,7 @@ fn makeCall(
     const is_const = CurrSelfType == *const SelfType;
     const self = if (is_const) constSelfPtrAs(self_ptr, ImplT) else selfPtrAs(self_ptr, ImplT);
     const fptr = @field(ImplT, name);
-    const first_arg_ptr = comptime std.meta.trait.is(.Pointer)(@typeInfo(@TypeOf(fptr)).Fn.params[0].type.?);
+    const first_arg_ptr = comptime @typeInfo(@typeInfo(@TypeOf(fptr)).Fn.params[0].type.?) == .Pointer;
     const self_arg = if (first_arg_ptr) .{self} else .{self.*};
 
     return switch (call_type) {
@@ -343,14 +342,16 @@ fn getFunctionFromImpl(comptime name: []const u8, comptime FnT: type, comptime I
 }
 
 fn makeVTable(comptime VTableT: type, comptime ImplT: type) VTableT {
-    if (comptime !trait.isContainer(ImplT)) {
-        @compileError("Type '" ++ @typeName(ImplT) ++ "' must be a container to implement interface.");
+    switch (comptime @typeInfo(ImplT)) {
+        .Struct, .Union, .Enum, .Opaque => {},
+        else => @compileError("Type '" ++ @typeName(ImplT) ++ "' must be a container to implement interface."),
     }
+
     var vtable: VTableT = undefined;
 
     for (std.meta.fields(VTableT)) |field| {
         var fn_type = field.type;
-        const is_optional = trait.is(.Optional)(fn_type);
+        const is_optional = @typeInfo(fn_type) == .Optional;
         if (is_optional) {
             fn_type = std.meta.Child(fn_type);
         }
@@ -376,7 +377,7 @@ fn makeVTable(comptime VTableT: type, comptime ImplT: type) VTableT {
 }
 
 fn checkVtableType(comptime VTableT: type) void {
-    if (comptime !trait.is(.Struct)(VTableT)) {
+    if (comptime !(@typeInfo(VTableT) == .Struct)) {
         @compileError("VTable type " ++ @typeName(VTableT) ++ " must be a struct.");
     }
 
@@ -390,15 +391,15 @@ fn checkVtableType(comptime VTableT: type) void {
     for (std.meta.fields(VTableT)) |field| {
         var field_type = field.type;
 
-        if (trait.is(.Optional)(field_type)) {
+        if (@typeInfo(field_type) == .Optional) {
             field_type = std.meta.Child(field_type);
         }
 
-        if (trait.is(.Pointer)(field_type)) {
+        if (@typeInfo(field_type) == .Pointer) {
             field_type = std.meta.Child(field_type);
         }
 
-        if (!trait.is(.Fn)(field_type)) {
+        if (!(@typeInfo(field_type) == .Fn)) {
             @compileError("VTable type defines non function field '" ++ field.name ++ "'.");
         }
 
@@ -418,7 +419,7 @@ fn checkVtableType(comptime VTableT: type) void {
 fn vtableHasMethod(comptime VTableT: type, comptime name: []const u8, is_optional: *bool, is_async: *bool, is_method: *bool) bool {
     for (std.meta.fields(VTableT)) |field| {
         if (std.mem.eql(u8, name, field.name)) {
-            is_optional.* = trait.is(.Optional)(field.type);
+            is_optional.* = @typeInfo(field.type) == .Optional;
             const fn_typeinfo = @typeInfo(std.meta.Child(if (is_optional.*) std.meta.Child(field.type) else field.type)).Fn;
             is_async.* = fn_typeinfo.calling_convention == .Async;
             is_method.* = fn_typeinfo.params.len > 0 and blk: {
@@ -435,9 +436,9 @@ fn vtableHasMethod(comptime VTableT: type, comptime name: []const u8, is_optiona
 fn VTableReturnType(comptime VTableT: type, comptime name: []const u8) type {
     for (std.meta.fields(VTableT)) |field| {
         if (std.mem.eql(u8, name, field.name)) {
-            const is_optional = trait.is(.Optional)(field.type);
+            const is_optional = @typeInfo(field.type) == .Optional;
 
-            var fn_ret_type = (if (is_optional)
+            const fn_ret_type = (if (is_optional)
                 @typeInfo(std.meta.Child(std.meta.Child(field.type))).Fn.return_type
             else
                 @typeInfo(std.meta.Child(field.type)).Fn.return_type) orelse noreturn;

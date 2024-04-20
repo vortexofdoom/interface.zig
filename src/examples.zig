@@ -56,7 +56,7 @@ test "Comptime only interface" {
     };
 
     comptime var iface = try TestIFace.init(TestType{ .state = 0 });
-    try expectEqual(@as(u8, 42), iface.call("foo", .{42}));
+    try expectEqual(@as(u8, 42), comptime iface.call("foo", .{42}));
 }
 
 test "Owning interface with optional function and a non-method function" {
